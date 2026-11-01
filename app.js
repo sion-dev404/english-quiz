@@ -164,8 +164,13 @@
     run = null;
     var sets = allSets(), S = getSet(curSet);
     curSet = S.id;
-    var wrongs = loadJson(K_WRONG);
+    var wrongs = loadJson(K_WRONG), due = dueList(wrongs);
     var h = '<h1>영단어 퀴즈</h1><p class="sub">학습지로 만든 퀴즈예요. 풀 때마다 순서와 보기가 새로 섞여요.</p>';
+    if (due.length) {
+      h += '<button class="primary" style="width:100%" data-mode="review">📅 오늘 복습할 문제 ' + due.length + "개 풀기</button>";
+    } else if (wrongs.length) {
+      h += '<p class="sub">📅 오늘 복습할 문제는 없어요. 다음 복습: ' + nextDueText(wrongs) + "</p>";
+    }
     h += "<h2>학습지 고르기</h2><div class=\"row chips\">";
     sets.forEach(function (s) {
       h += '<button data-set="' + esc(s.id) + '" class="' + (s.id === S.id ? "sel" : "") + '">' + esc(s.title) + "</button>";
@@ -181,8 +186,8 @@
       h += '<button data-mode="' + m.id + '">' + esc(m.label) + "<small>" + esc(m.desc) + "</small></button>";
     });
     h += "</div>";
-    h += '<h2>오답 노트</h2><button data-mode="wrongs"' + (wrongs.length ? "" : " disabled") + ">틀린 문제 다시 풀기<small>"
-      + wrongs.length + "문제 저장됨</small></button>";
+    h += '<h2>오답 노트</h2><button data-mode="wrongsAll"' + (wrongs.length ? "" : " disabled") + ">저장된 오답 전부 풀기<small>"
+      + wrongs.length + "문제 저장됨 · 틀린 문제는 1일, 3일, 7일 뒤에 복습 목록에 나와요</small></button>";
     app.innerHTML = h;
     app.querySelectorAll("[data-set]").forEach(function (b) { b.onclick = function () { curSet = b.dataset.set; home(); }; });
     app.querySelectorAll("[data-count]").forEach(function (b) { b.onclick = function () { count = +b.dataset.count; home(); }; });
@@ -190,19 +195,58 @@
   }
 
   // ---------- 화면: 퀴즈 ----------
-  function start(modeId) {
+  // retryQs가 있으면 방금 틀린 문제만 다시 푼다 (복습 일정에는 반영하지 않는다).
+  function start(modeId, retryQs) {
     var qs;
-    if (modeId === "wrongs") {
-      qs = shuffle(loadJson(K_WRONG));
+    if (retryQs || modeId === "review" || modeId === "wrongsAll") {
+      var src = retryQs || (modeId === "review" ? dueList(loadJson(K_WRONG)) : loadJson(K_WRONG));
+      qs = shuffle(src).map(function (q) { return Object.assign({}, q); });
       qs.forEach(function (q) { if (q.kind === "choice") q.choices = shuffle(q.choices); });
     } else {
       var m = MODES.filter(function (x) { return x.id === modeId; })[0];
       qs = shuffle(m.make(getSet(curSet)));
     }
-    if (count) qs = qs.slice(0, count);
+    if (count && !retryQs) qs = qs.slice(0, count);
     if (!qs.length) return home();
-    run = { mode: modeId, qs: qs, i: 0, results: [] };
+    run = { mode: modeId, qs: qs, i: 0, results: [], noRecord: !!retryQs };
     show();
+  }
+
+  // ---------- 복습 일정 (1일 → 3일 → 7일 뒤) ----------
+  var DAY = 86400000, STEPS = [1, 3, 7];
+  function dueList(wrongs) {
+    var now = Date.now();
+    return wrongs.filter(function (w) { return (w.due || 0) <= now; });
+  }
+  function nextDueText(wrongs) {
+    var t = Math.min.apply(null, wrongs.map(function (w) { return w.due || 0; }));
+    var days = Math.max(1, Math.ceil((t - Date.now()) / DAY));
+    return days + "일 뒤";
+  }
+  function recordResults(results) {
+    var wrongs = loadJson(K_WRONG), now = Date.now();
+    results.forEach(function (r) {
+      var old = wrongs.filter(function (w) { return w.id === r.q.id; })[0];
+      if (!r.ok) {
+        wrongs = wrongs.filter(function (w) { return w.id !== r.q.id; });
+        wrongs.push(Object.assign({}, r.q, { step: 0, due: now + STEPS[0] * DAY }));
+      } else if (old && (old.due || 0) <= now) {
+        var step = (old.step || 0) + 1;
+        wrongs = wrongs.filter(function (w) { return w.id !== r.q.id; });
+        if (step < STEPS.length) wrongs.push(Object.assign({}, old, { step: step, due: now + STEPS[step] * DAY }));
+      }
+    });
+    lsSet(K_WRONG, JSON.stringify(wrongs));
+  }
+
+  // 철자가 한 글자만 다른지 확인 (정답 처리는 하지 않고 알려 주기만 한다).
+  function oneOff(a, b) {
+    if (Math.abs(a.length - b.length) > 1 || a === b) return false;
+    var i = 0;
+    while (i < a.length && i < b.length && a[i] === b[i]) i++;
+    if (a.length === b.length) return a.slice(i + 1) === b.slice(i + 1);
+    var s = a.length < b.length ? a : b, l = a.length < b.length ? b : a;
+    return s.slice(i) === l.slice(i + 1);
   }
 
   function show() {
@@ -234,12 +278,13 @@
     }
     var done = false;
 
-    function feedback(ok, given, praise) {
+    function feedback(ok, given, praise, note) {
       done = true;
       run.results.push({ q: q, ok: ok, given: given });
       var fb = document.getElementById("fb");
       fb.className = "fb " + (ok ? "ok" : "no");
-      fb.innerHTML = "<b>" + (ok ? (praise || "정답!") : "오답") + "</b>"
+      fb.innerHTML = "<b>" + (ok ? (praise || "정답!") : (note ? "아깝다! 오답이에요" : "오답")) + "</b>"
+        + (note ? "<div>" + esc(note) + "</div>" : "")
         + (ok && q.kind !== "self" ? "" : "<div>정답: " + esc(q.show) + "</div>")
         + (q.explain ? "<span>" + esc(q.explain) + "</span>" : "")
         + '<button class="primary next" id="next">' + (run.i + 1 < n ? "다음 (Enter)" : "결과 보기 (Enter)") + "</button>";
@@ -275,7 +320,9 @@
         if (!norm(v)) return;
         input.disabled = true;
         document.getElementById("submit").style.display = "none";
-        feedback(q.answers.some(function (a) { return norm(a) === norm(v); }), v);
+        var ok = q.answers.some(function (a) { return norm(a) === norm(v); });
+        var near = !ok && q.answers.some(function (a) { return a.length >= 4 && oneOff(norm(v), norm(a)); });
+        feedback(ok, v, null, near ? "한 글자만 달라요. 시험에서는 틀린 걸로 쳐요." : null);
       };
       document.getElementById("submit").onclick = submit;
       run.key = function (e) { if (e.key === "Enter") { if (done) next(); else submit(); } };
@@ -301,18 +348,13 @@
   function finish() {
     run.key = null;
     var res = run.results, ok = res.filter(function (r) { return r.ok; }).length;
-    var wrongs = loadJson(K_WRONG);
-    res.forEach(function (r) {
-      wrongs = wrongs.filter(function (w) { return w.id !== r.q.id; });
-      if (!r.ok) wrongs.push(r.q);
-    });
-    lsSet(K_WRONG, JSON.stringify(wrongs));
+    if (!run.noRecord) recordResults(res);
     var h = "<h1>결과</h1>";
     if (!res.length) { h += '<p class="sub">푼 문제가 없어요.</p>'; }
     else {
       var pct = Math.round(ok / res.length * 100);
       h += '<div class="card"><div class="score">' + ok + " / " + res.length + '</div><p class="sub" style="text-align:center">'
-        + pct + "점 · " + (pct === 100 ? "완벽해요! 🎉" : pct >= 80 ? "잘했어요!" : "틀린 문제는 오답 노트에 저장했어요.") + "</p></div>";
+        + pct + "점 · " + (pct === 100 ? "완벽해요! 🎉" : pct >= 80 ? "잘했어요!" : "틀린 문제는 내일부터 복습 목록에 나와요.") + "</p></div>";
       var bad = res.filter(function (r) { return !r.ok; });
       if (bad.length) {
         h += '<h2>틀린 문제</h2><div class="card">';
@@ -328,8 +370,10 @@
     h += '<button id="again">같은 유형 다시</button><button id="home">처음으로</button></div>';
     app.innerHTML = h;
     var mode = run.mode, retry = document.getElementById("retry");
-    if (retry) retry.onclick = function () { start("wrongs"); };
-    document.getElementById("again").onclick = function () { start(mode); };
+    var badQs = res.filter(function (r) { return !r.ok; }).map(function (r) { return r.q; });
+    if (retry) retry.onclick = function () { start("retry", badQs); };
+    var allQs = run.qs;
+    document.getElementById("again").onclick = function () { if (mode === "retry") start("retry", allQs); else start(mode); };
     document.getElementById("home").onclick = home;
   }
 
