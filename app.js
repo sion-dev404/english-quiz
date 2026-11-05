@@ -259,10 +259,10 @@
     if (q.hint) h += '<div class="hint" style="margin-top:8px">' + esc(q.hint) + "</div>";
     if (q.kind === "choice") {
       h += '<div class="choices">';
-      q.choices.forEach(function (c, k) { h += '<button data-c="' + k + '">' + (k + 1) + ". " + esc(c) + "</button>"; });
+      q.choices.forEach(function (c, k) { h += '<button data-c="' + k + '">' + esc(c) + "</button>"; });
       h += "</div>";
     } else if (q.kind === "type") {
-      h += '<input type="text" id="ans" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="정답 입력 후 Enter">';
+      h += '<input type="text" id="ans" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="정답을 입력하세요">';
       h += '<button class="primary next" id="submit">확인</button>';
     } else {
       h += '<input type="text" id="ans" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="영어 문장을 써 보세요">';
@@ -287,7 +287,7 @@
         + (note ? "<div>" + esc(note) + "</div>" : "")
         + (ok && q.kind !== "self" ? "" : "<div>정답: " + esc(q.show) + "</div>")
         + (q.explain ? "<span>" + esc(q.explain) + "</span>" : "")
-        + '<button class="primary next" id="next">' + (run.i + 1 < n ? "다음 (Enter)" : "결과 보기 (Enter)") + "</button>";
+        + '<button class="primary next" id="next">' + (run.i + 1 < n ? "다음" : "결과 보기") + "</button>";
       document.getElementById("next").onclick = next;
       document.getElementById("next").focus();
     }
